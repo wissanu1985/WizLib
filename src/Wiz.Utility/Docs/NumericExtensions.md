@@ -56,6 +56,14 @@ using Wiz.Utility.Extensions;
 - RoundTo: ปัด `decimal` ด้วยโหมดที่กำหนด (เริ่มต้น `AwayFromZero`)
 - SafeDivide: ถ้าส่วนเป็นศูนย์ คืน `defaultValue` เพื่อกัน exception
 
+## Exceptions
+- `MapRange(double|decimal)`: โยน `ArgumentException` เมื่อ `sourceMin == sourceMax` (ช่วงต้นทางไม่สามารถมีความกว้างเป็นศูนย์)
+- เมธอดอื่นๆ ไม่โยน exception ภายใต้การใช้งานปกติ (ป้องกัน edge cases ไว้แล้ว เช่น `SafeDivide` เมื่อหารด้วยศูนย์)
+
+## Performance & Thread-safety
+- ทุกเมธอดเป็น pure function และ O(1) โดยไม่สร้าง allocation หนัก จึงมีประสิทธิภาพและ thread-safe
+- `ToHumanSize` ทำงานกับค่าจำนวนเต็ม/ทศนิยมและฟอร์แมตข้อความครั้งเดียว เหมาะสำหรับ UI/Logs
+
 ## Quick Examples
 ตัวอย่างสั้นๆ ที่ครอบคลุมเคสหลักและ edge cases
 
@@ -130,3 +138,4 @@ class Demo
 - ToOrdinal (เคส 11/12/13, ค่าติดลบ)
 - ToHumanSize (decimal/binary units, overloads)
 - RoundTo และ SafeDivide
+

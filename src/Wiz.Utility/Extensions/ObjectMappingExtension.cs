@@ -69,7 +69,7 @@ namespace Wiz.Utility.Extensions
                 return collResult;
 
             // Complex object mapping (POCO)
-            object destination = existingDestination ?? CreateInstanceOrThrow(destType);
+            object destination = existingDestination ?? CreateInstanceWithCtorIfNeeded(source, destType, ctx) ?? CreateInstanceOrThrow(destType);
 
             // cycle detection
             if (!destType.IsValueType)
@@ -97,6 +97,15 @@ namespace Wiz.Utility.Extensions
 
                     if (srcVal is null && ctx.Options.IgnoreNullValues)
                         continue;
+
+                    // Skip assigning default value for value-types when IgnoreNullValues is true
+                    if (ctx.Options.IgnoreNullValues && srcVal is not null)
+                    {
+                        var svType = srcVal.GetType();
+                        var underlying = Nullable.GetUnderlyingType(svType) ?? svType;
+                        if (underlying.IsValueType && Equals(srcVal, Activator.CreateInstance(underlying)))
+                            continue;
+                    }
 
                     var destPropType = map.DestProp.PropertyType;
                     object? valueToAssign;
@@ -160,6 +169,10 @@ namespace Wiz.Utility.Extensions
                     {
                         ctx.Options.ErrorHandler(new MappingError(sourceType, destType, map.DestProp?.Name, ex));
                     }
+
+                    // If policy is Throw on conversion failure and the error indicates conversion, rethrow
+                    if (ctx.Options.ConversionFailure == ConversionFailureBehavior.Throw && ex is InvalidCastException)
+                        throw;
 
                     if (ctx.Options.StrictMode)
                         throw;
@@ -262,6 +275,127 @@ namespace Wiz.Utility.Extensions
             }
         }
 
+        // Try to create destination via constructor arguments mapped from source when no parameterless ctor exists
+        private static object? CreateInstanceWithCtorIfNeeded(object? source, Type destType, MappingContext ctx)
+        {
+            if (source is null)
+                return null;
+
+            // if parameterless exists, let normal path handle it
+            if (destType.GetConstructor(Type.EmptyTypes) is not null)
+                return null;
+
+            var ctors = destType.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                                 .OrderByDescending(c => c.GetParameters().Length)
+                                 .ToArray();
+            if (ctors.Length == 0)
+                return null;
+
+            var srcType = source.GetType();
+            var caseSensitive = ctx.Options.CaseSensitive;
+            var srcProps = srcType.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                                   .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
+                                   .ToArray();
+            var comparer = caseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+            var srcDict = srcProps.ToDictionary(p => p.Name, comparer);
+
+            foreach (var ctor in ctors)
+            {
+                var ps = ctor.GetParameters();
+                var args = new object?[ps.Length];
+                var ok = true;
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var p = ps[i];
+                    var targetType = p.ParameterType;
+
+                    // Prefer custom converter from the whole source object when available
+                    if (ctx.Options.TryCustomConvert(source, targetType, out var convFromWhole))
+                    {
+                        args[i] = convFromWhole;
+                        continue;
+                    }
+
+                    object? raw = null;
+                    var pName = p.Name;
+                    if (pName is not null && srcDict.TryGetValue(pName, out var sp))
+                    {
+                        raw = sp.GetValue(source);
+                    }
+
+                    // Respect IgnoreNullValues and default value-types
+                    if (raw is null && ctx.Options.IgnoreNullValues)
+                    {
+                        // default for parameter type
+                        args[i] = targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+                        continue;
+                    }
+                    if (ctx.Options.IgnoreNullValues && raw is not null)
+                    {
+                        var rvType = raw.GetType();
+                        var underlying = Nullable.GetUnderlyingType(rvType) ?? rvType;
+                        if (underlying.IsValueType && Equals(raw, Activator.CreateInstance(underlying)))
+                        {
+                            args[i] = targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+                            continue;
+                        }
+                    }
+
+                    // Custom converter and type change for value
+                    if (raw is not null && ctx.Options.TryCustomConvert(raw, targetType, out var convVal))
+                    {
+                        args[i] = convVal;
+                        continue;
+                    }
+                    if (TryChangeType(raw, targetType, ctx.Options, out var changed))
+                    {
+                        args[i] = changed;
+                        continue;
+                    }
+
+                    // Failed conversion for simple types
+                    if (raw is not null && IsSimpleType(raw.GetType()) && IsSimpleType(targetType))
+                    {
+                        switch (ctx.Options.ConversionFailure)
+                        {
+                            case ConversionFailureBehavior.SetNullOrDefault:
+                                args[i] = targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+                                break;
+                            case ConversionFailureBehavior.Skip:
+                                args[i] = targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+                                break;
+                            case ConversionFailureBehavior.Throw:
+                                ok = false;
+                                break;
+                            default:
+                                args[i] = targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+                                break;
+                        }
+                        if (!ok) break;
+                    }
+                    else
+                    {
+                        // complex types - recurse
+                        args[i] = AdaptInternal(raw, targetType, existingDestination: null, ctx);
+                    }
+                }
+
+                if (!ok)
+                    continue;
+
+                try
+                {
+                    return ctor.Invoke(args);
+                }
+                catch
+                {
+                    // try next ctor
+                }
+            }
+
+            return null;
+        }
+
         private static bool TryChangeType(object? value, Type destinationType, MappingOptions options, out object? result)
         {
             result = null;
@@ -318,12 +452,13 @@ namespace Wiz.Utility.Extensions
                     if (value is string ds)
                     {
                         var fmts = options.DateTimeFormats ?? MappingOptions.DefaultDateTimeFormats;
-                        if (DateTime.TryParseExact(ds, fmts, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dtx))
+                        var styles = System.Globalization.DateTimeStyles.RoundtripKind;
+                        if (DateTime.TryParseExact(ds, fmts, System.Globalization.CultureInfo.InvariantCulture, styles, out var dtx))
                         {
                             result = dtx;
                             return true;
                         }
-                        if (DateTime.TryParse(ds, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dtp))
+                        if (DateTime.TryParse(ds, System.Globalization.CultureInfo.InvariantCulture, styles, out var dtp))
                         {
                             result = dtp;
                             return true;
@@ -336,12 +471,13 @@ namespace Wiz.Utility.Extensions
                     if (value is string dos)
                     {
                         var fmts = options.DateTimeFormats ?? MappingOptions.DefaultDateTimeFormats;
-                        if (DateTimeOffset.TryParseExact(dos, fmts, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dtoe))
+                        var styles = System.Globalization.DateTimeStyles.RoundtripKind;
+                        if (DateTimeOffset.TryParseExact(dos, fmts, System.Globalization.CultureInfo.InvariantCulture, styles, out var dtoe))
                         {
                             result = dtoe;
                             return true;
                         }
-                        if (DateTimeOffset.TryParse(dos, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dtop))
+                        if (DateTimeOffset.TryParse(dos, System.Globalization.CultureInfo.InvariantCulture, styles, out var dtop))
                         {
                             result = dtop;
                             return true;

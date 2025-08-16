@@ -2,7 +2,7 @@
 
 > ส่วนขยายสตริงที่ใช้งานได้จริง ครอบคลุมงานทั่วไป: null/empty checks, safe substring, whitespace/diacritics normalization, case/snake/kebab/slug, Base64, Thai/English currency text, Thai citizen ID validation, similarity (Levenshtein), hashing (SHA-256) ฯลฯ
 
-Last updated: 2025-08-15
+Last updated: 2025-08-16
 
 ## Overview | ภาพรวม
 - ชุดเมธอด extension ใต้เนมสเปซ `Wiz.Utility.Extensions` สำหรับ `string` และบางเมธอดสำหรับ `decimal` ที่เกี่ยวข้อง (เช่น `ToThaiBahtText(this decimal)`).
@@ -82,6 +82,105 @@ class Demo
     }
 }
 ```
+
+## Unit-tested Examples | ตัวอย่างยืนยันด้วย Unit Tests
+- __SafeSubstring__ (`SafeSubstring_Inputs_ReturnsExpected` ใน `tests/Wiz.Utility.Test/Extensions/StringExtensionsTests.cs`)
+  ```csharp
+  "hello".SafeSubstring(-5, 2); // "he"
+  "hello".SafeSubstring(10, 2); // ""
+  "hello".SafeSubstring(1, 2);  // "el"
+  ```
+
+- __Truncate__ (`Truncate_*` tests)
+  ```csharp
+  ((string?)null).Truncate(5);            // null
+  "hello".Truncate(10);                  // "hello"
+  "helloworld".Truncate(7, "...");     // "hell..."
+  "helloworld".Truncate(5, "[ellipsis]"); // "hello"
+  ```
+
+- **Whitespace/Diacritics/Title/Humanize/Dehumanize**
+  ```csharp
+  "  a\t  b\n c  ".NormalizeWhitespace();                   // "a b c"
+  "Café déjà vu – ångström".RemoveDiacritics();               // "Cafe deja vu – angstrom"
+  "hELLo woRLD".ToTitleCase(new CultureInfo("en-US"));       // "Hello World"
+  var input = "HelloWorldXML_test-case";
+  input.Humanize(false, new CultureInfo("en-US"));            // "Hello world xml test case"
+  input.Humanize(true, new CultureInfo("en-US"));             // "Hello World Xml Test Case"
+  "hello world-XML_case".DehumanizeToPascalCase(new CultureInfo("en-US")); // "HelloWorldXmlCase"
+  ```
+
+- **Case-insensitive & Contains**
+  ```csharp
+  "AbC".EqualsOrdinalIgnoreCase("aBc");   // true
+  "abc".EqualsOrdinalIgnoreCase("abc ");  // false
+  "hello world".ContainsOrdinalIgnoreCase("WORLD"); // true
+  ((string?)null).ContainsOrdinalIgnoreCase("a");    // false
+  ```
+
+- **Base64**
+  ```csharp
+  var original = "Hello, 世界";
+  var b64 = original.ToBase64();  // matches Convert.ToBase64String(Encoding.UTF8.GetBytes(original))
+  var decoded = b64.FromBase64(); // equals original
+  "###".FromBase64();             // ""
+  ```
+
+- **Slugify**
+  ```csharp
+  "Café déjà vu!".Slugify(); // "cafe-deja-vu"
+  var t = Substitute.For<Wiz.Utility.Text.IStringTransliterator>();
+  t.Transliterate(Arg.Any<string>()).Returns(ci => "sawasdee thai123");
+  "สวัสดี ไทย123!!".Slugify(t, 200); // "sawasdee-thai123"
+  "Hello world".Slugify(5);          // "hello"
+  ```
+
+- **Snake/Kebab**
+  ```csharp
+  "HelloWorld test-Case".ToSnakeCase(); // "hello_world_test_case"
+  "HelloWorld test_Case".ToKebabCase(); // "hello-world-test-case"
+  ```
+
+- **Similarity/Distance**
+  ```csharp
+  "kitten".LevenshteinDistance("sitting"); // 3
+  "kitten".SimilarityRatio("sitting");     // ≈ 0.57143
+  "same".SimilarityRatio("same");           // 1.0
+  "".SimilarityRatio("a");                  // 0.0
+  ```
+
+- **Digits normalization (Thai -> ASCII)**
+  ```csharp
+  "ราคา ๑๒๓.๔๕ บาท".NormalizeDigits(); // "ราคา 123.45 บาท"
+  ```
+
+- **Thai/English Baht text**
+  ```csharp
+  "๑๒๓.๔๕".ToThaiBahtText(); // "หนึ่งร้อยยี่สิบสามบาทสี่สิบห้าสตางค์"
+  0m.ToThaiBahtText();         // "ศูนย์บาทถ้วน"
+  (-1m).ToThaiBahtText();      // "ลบหนึ่งบาทถ้วน"
+  0.25m.ToThaiBahtText();      // "ยี่สิบห้าสตางค์"
+  1.995m.ToThaiBahtText();     // "สองบาทถ้วน"
+
+  "123.45".ToEnglishBahtText(); // "one hundred twenty-three baht and forty-five satang"
+  0m.ToEnglishBahtText();        // "zero baht only"
+  1.25m.ToEnglishBahtText();     // "one baht and twenty-five satang"
+  (-12m).ToEnglishBahtText();    // "minus twelve baht only"
+  1.995m.ToEnglishBahtText();    // "two baht only"
+  ```
+
+- **Thai Citizen ID validation**
+  ```csharp
+  // A computed valid 13-digit string should be true; malformed/short should be false.
+  "123".IsThaiCitizenId();       // false
+  ((string?)null).IsThaiCitizenId(); // false
+  ```
+
+- **SHA-256**
+  ```csharp
+  "abc".ToSha256Hex(); // "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  ((string?)null).ToSha256Hex(); // ""
+  ```
 
 ## API Reference | สรุปเมธอดสำคัญ (ย่อ)
 - Null/Empty

@@ -42,6 +42,21 @@ string json = dto.ToJson(
 
 // Object mapping (lightweight)
 var person = new { Id = "5", Name = "Alice", Age = "42" }.Adapt<Person>();
+
+// LINQ helpers (performance-focused)
+var data = Enumerable.Range(0, 10_000);
+// TryFirst avoids exceptions and extra allocations
+if (data.TryFirst(out var first)) { /* use first */ }
+
+// Where+Select in a single pass with preallocation when possible
+var evenSquares = data.WhereSelectToList(i => (i & 1) == 0, i => i * i);
+
+// Materialize efficiently
+var arr  = data.ToArrayFast();
+var list = data.ToListFast();
+
+// Project and materialize efficiently
+var names = new[] { "Ann", "Bob" }.SelectToList(s => s.ToUpperInvariant());
 ```
 
 ### Features
@@ -50,6 +65,7 @@ var person = new { Id = "5", Name = "Alice", Age = "42" }.Adapt<Person>();
 - __NumericExtensions__: even/odd, range check/Clamp, NearlyEquals (double/decimal), map range, ordinal, human-readable size, rounding, safe divide
 - __JsonExtension__: ซีเรียไลซ์/ดีซีเรียไลซ์ด้วย STJ/Newtonsoft, naming policies (camel/snake/kebab), enum-as-string, custom date format, auto-detect naming
 - __ObjectMappingExtension__: map ตามชื่อพร็อพเพอร์ตี (case-insensitive), scalar/collection conversions, custom converters, ignore, failure policies, cycle detection
+- __LinqExtension__: helpers ที่ลด allocations/หลาย pass เช่น `TryFirst`/`TrySingle`, `ToArrayFast`/`ToListFast`, `SelectToList`, `WhereSelectToList`, `ForEachFast`
 
 ### Documentation
 - `src/Wiz.Utility/Docs/DateTimeExtensions.md`

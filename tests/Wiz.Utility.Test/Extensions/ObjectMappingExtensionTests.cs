@@ -15,6 +15,103 @@ public class ObjectMappingExtensionTests
         public string? Age { get; set; }
     }
 
+    private enum Color { Red = 1, Green = 2, Blue = 3 }
+    private sealed class EnumSrc { public string? Shade { get; set; } }
+    private sealed class EnumDest { public Color Shade { get; set; } }
+
+    private sealed class CtorSelectSrc { public string? Id { get; set; } public string? When { get; set; } }
+    private sealed class CtorSelectDest
+    {
+        public int Id { get; }
+        public DateTime When { get; }
+        public CtorSelectDest(int id, DateTime when) { Id = id; When = when; }
+        public CtorSelectDest(int id) { Id = id; When = default; }
+    }
+
+    [Fact]
+    public void Enum_String_Name_Parses_To_Enum_CaseInsensitive()
+    {
+        var src = new EnumSrc { Shade = "bLuE" };
+        var dest = src.Adapt<EnumDest>();
+        dest.ShouldNotBeNull();
+        dest!.Shade.ShouldBe(Color.Blue);
+    }
+
+    [Fact]
+    public void Ctor_Selection_Falls_Back_On_Throwing_ConversionFailure()
+    {
+        var src = new CtorSelectSrc { Id = "5", When = "not-a-date" };
+        var opts = new MappingOptions { ConversionFailure = ConversionFailureBehavior.Throw };
+        var dest = src.Adapt<CtorSelectDest>(opts);
+        dest.ShouldNotBeNull();
+        dest!.Id.ShouldBe(5);
+        dest.When.ShouldBe(default);
+    }
+
+    // Additional constructor-based destination types for targeted tests
+    private sealed class CtorOnlyDest
+    {
+        public int Id { get; }
+        public string? Name { get; }
+        public CtorOnlyDest(int id, string? name)
+        {
+            Id = id;
+            Name = name;
+        }
+    }
+
+    private sealed class ThrowingCtorDest
+    {
+        public string? Name { get; }
+        public ThrowingCtorDest(string? name)
+        {
+            // Simulate ctor failure to force CreateInstanceWithCtorIfNeeded to give up
+            throw new InvalidOperationException("ctor fail");
+        }
+    }
+
+    private sealed class CtorSource
+    {
+        public string? Name { get; set; }
+        public string? Id { get; set; }
+    }
+
+    [Fact]
+    public void Adapt_FastPath_When_Destination_AssignableFrom_Source_Returns_Same_Instance()
+    {
+        var s = "abc";
+        var result = s.Adapt<string>();
+        ReferenceEquals(s, result).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AdaptInto_With_Null_Source_Returns_Existing_Unchanged()
+    {
+        var dest = new { X = 1 };
+        object? src = null;
+        var mapped = src.AdaptInto(dest);
+        ReferenceEquals(dest, mapped).ShouldBeTrue();
+        mapped.X.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Adapt_Uses_Constructor_When_No_Parameterless_Ctor()
+    {
+        var src = new CtorSource { Name = "Zed", Id = "10" }; // Id string -> int via TryChangeType
+        var dest = src.Adapt<CtorOnlyDest>();
+        dest.ShouldNotBeNull();
+        dest!.Id.ShouldBe(10);
+        dest.Name.ShouldBe("Zed");
+    }
+
+    [Fact]
+    public void Adapt_NoParameterlessCtor_And_Failing_Ctor_Throws_ParameterlessRequired()
+    {
+        var src = new { Name = "X" };
+        var ex = Should.Throw<InvalidOperationException>(() => src.Adapt<ThrowingCtorDest>());
+        ex.Message.ShouldContain("must have a public parameterless constructor");
+    }
+
     private sealed class BoolSrc { public string? B { get; set; } }
     private sealed class BoolDest { public bool B { get; set; } }
 
